@@ -21,26 +21,35 @@ jobs:
           Write-Host "========================================"
 
           try {
-            Install-Language pt-BR -CopyToSettings -ErrorAction Stop
-          }
-          catch {
-            Write-Host "Pacote de idioma não pôde ser instalado completamente."
-          }
-
-          try {
             $idioma = New-WinUserLanguageList pt-BR
 
-            Set-WinUserLanguageList $idioma -Force
-            Set-WinUILanguageOverride pt-BR
-            Set-Culture pt-BR
-            Set-WinHomeLocation -GeoId 32
+            Set-WinUserLanguageList `
+              $idioma `
+              -Force `
+              -ErrorAction Stop
 
-            Write-Host "Português do Brasil configurado."
+            Set-WinUILanguageOverride `
+              -Language pt-BR `
+              -ErrorAction SilentlyContinue
+
+            Set-Culture `
+              pt-BR `
+              -ErrorAction SilentlyContinue
+
+            Set-WinHomeLocation `
+              -GeoId 32 `
+              -ErrorAction SilentlyContinue
+
+            Write-Host "Português do Brasil configurado." `
+              -ForegroundColor Green
           }
           catch {
-            Write-Host "Algumas configurações de idioma exigirão novo logon."
+            Write-Host "Algumas configurações de idioma não puderam ser aplicadas."
+            Write-Host $_.Exception.Message
           }
 
+          Write-Host ""
+          Write-Host "O restante do RDP continuará normalmente."
 
       # ============================================================
       # 2. DIAGNÓSTICO INICIAL
@@ -49,9 +58,9 @@ jobs:
         shell: powershell
         run: |
           Write-Host ""
-          Write-Host "========================================" -ForegroundColor Cyan
-          Write-Host " DIAGNÓSTICO DO RUNNER" -ForegroundColor Cyan
-          Write-Host "========================================" -ForegroundColor Cyan
+          Write-Host "========================================"
+          Write-Host " DIAGNÓSTICO DO RUNNER"
+          Write-Host "========================================"
 
           $cpu = Get-CimInstance Win32_Processor
           $ram = Get-CimInstance Win32_ComputerSystem
@@ -68,12 +77,12 @@ jobs:
 
           Write-Host ""
           Write-Host "DISCOS:"
+
           Get-PSDrive -PSProvider FileSystem |
             Select-Object Name,
               @{N="UsadoGB";E={[math]::Round($_.Used/1GB,2)}},
               @{N="LivreGB";E={[math]::Round($_.Free/1GB,2)}} |
             Format-Table -AutoSize
-
 
       # ============================================================
       # 3. LIMPEZA SEGURA
@@ -101,7 +110,6 @@ jobs:
             catch {}
           }
 
-          # Limpar cache de miniaturas
           try {
             Remove-Item `
               "$env:LOCALAPPDATA\Microsoft\Windows\Explorer\thumbcache*" `
@@ -110,17 +118,17 @@ jobs:
           }
           catch {}
 
-          # Limpeza do componente do Windows
           try {
             DISM.exe `
               /Online `
               /Cleanup-Image `
-              /StartComponentCleanup
+              /StartComponentCleanup `
+              /Quiet
           }
           catch {}
 
-          Write-Host "Limpeza concluída." -ForegroundColor Green
-
+          Write-Host "Limpeza concluída." `
+            -ForegroundColor Green
 
       # ============================================================
       # 4. CONFIGURAÇÕES BÁSICAS DE DESEMPENHO
@@ -130,7 +138,6 @@ jobs:
         run: |
           Write-Host "Configurando desempenho..."
 
-          # Desativar alguns efeitos visuais desnecessários
           try {
             Set-ItemProperty `
               "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" `
@@ -141,7 +148,6 @@ jobs:
           }
           catch {}
 
-          # Ativar plano de energia de alto desempenho, se disponível
           try {
             powercfg /setactive SCHEME_MIN
           }
@@ -149,37 +155,41 @@ jobs:
 
           Write-Host "Configurações aplicadas."
 
-
       # ============================================================
       # 5. INSTALAR FERRAMENTAS
       # ============================================================
       - name: 🛠️ Instalar ferramentas de desenvolvimento
         shell: powershell
         run: |
-          Write-Host "Instalando ferramentas..."
+          Write-Host "Verificando ferramentas..."
 
-          # Git
           if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-            winget install `
-              --id Git.Git `
-              --silent `
-              --accept-package-agreements `
-              --accept-source-agreements `
-              2>$null
+            try {
+              winget install `
+                --id Git.Git `
+                --silent `
+                --accept-package-agreements `
+                --accept-source-agreements
+            }
+            catch {
+              Write-Host "Git não pôde ser instalado."
+            }
           }
 
-          # Node.js LTS
           if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-            winget install `
-              --id OpenJS.NodeJS.LTS `
-              --silent `
-              --accept-package-agreements `
-              --accept-source-agreements `
-              2>$null
+            try {
+              winget install `
+                --id OpenJS.NodeJS.LTS `
+                --silent `
+                --accept-package-agreements `
+                --accept-source-agreements
+            }
+            catch {
+              Write-Host "Node.js não pôde ser instalado."
+            }
           }
 
           Write-Host "Ferramentas verificadas."
-
 
       # ============================================================
       # 6. VERIFICAR DIRECTX E GPU
@@ -204,8 +214,9 @@ jobs:
 
           Write-Host ""
           Write-Host "DirectX:"
+
           try {
-            dxdiag /t "$env:TEMP\dxdiag.txt"
+            dxdiag /t "$env:TEMP\dxdiag.txt" | Out-Null
 
             if (Test-Path "$env:TEMP\dxdiag.txt") {
               Select-String `
@@ -217,7 +228,6 @@ jobs:
             Write-Host "Diagnóstico do DirectX indisponível."
           }
 
-
       # ============================================================
       # 7. PREPARAR ARMAZENAMENTO
       # ============================================================
@@ -228,29 +238,24 @@ jobs:
           Write-Host " ARMAZENAMENTO"
           Write-Host "========================================"
 
-          New-Item `
-            -ItemType Directory `
-            -Force `
-            -Path "D:\Projetos" |
-            Out-Null
+          $pastas = @(
+            "D:\Projetos",
+            "D:\Roblox",
+            "D:\Downloads"
+          )
 
-          New-Item `
-            -ItemType Directory `
-            -Force `
-            -Path "D:\Roblox" |
-            Out-Null
-
-          New-Item `
-            -ItemType Directory `
-            -Force `
-            -Path "D:\Downloads" |
-            Out-Null
+          foreach ($pasta in $pastas) {
+            New-Item `
+              -ItemType Directory `
+              -Force `
+              -Path $pasta |
+              Out-Null
+          }
 
           Get-PSDrive -PSProvider FileSystem |
             Select-Object Name,
               @{N="LivreGB";E={[math]::Round($_.Free/1GB,2)}} |
             Format-Table
-
 
       # ============================================================
       # 8. CONFIGURAR RDP
@@ -266,14 +271,12 @@ jobs:
             -Value 0 `
             -Force
 
-          # Autenticação de nível de rede
           Set-ItemProperty `
             -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" `
             -Name "UserAuthentication" `
             -Value 1 `
             -Force
 
-          # TLS
           Set-ItemProperty `
             -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" `
             -Name "SecurityLayer" `
@@ -292,11 +295,11 @@ jobs:
 
           Restart-Service TermService -Force
 
-          Write-Host "RDP ativado."
-
+          Write-Host "RDP ativado." `
+            -ForegroundColor Green
 
       # ============================================================
-      # 9. CRIAR USUÁRIO
+      # 9. CRIAR USUÁRIO RDP
       # ============================================================
       - name: 🔑 Criar usuário RDP
         shell: powershell
@@ -326,18 +329,23 @@ jobs:
             -Force
 
           if (-not (Get-LocalUser `
-              -Name RDP `
+              -Name "RDP" `
               -ErrorAction SilentlyContinue)) {
 
             New-LocalUser `
-              -Name RDP `
+              -Name "RDP" `
               -Password $secure `
               -AccountNeverExpires
+
+            Write-Host "Usuário RDP criado."
+          }
+          else {
+            Write-Host "Usuário RDP já existe."
           }
 
           Add-LocalGroupMember `
             -Group "Remote Desktop Users" `
-            -Member RDP `
+            -Member "RDP" `
             -ErrorAction SilentlyContinue
 
           "SENHA_RDP=$senha" |
@@ -345,8 +353,7 @@ jobs:
               $env:GITHUB_ENV `
               -Append
 
-          Write-Host "Usuário RDP criado."
-
+          Write-Host "Usuário RDP configurado."
 
       # ============================================================
       # 10. INSTALAR TAILSCALE
@@ -373,10 +380,10 @@ jobs:
 
           Remove-Item `
             $arquivo `
-            -Force
+            -Force `
+            -ErrorAction SilentlyContinue
 
           Write-Host "Tailscale instalado."
-
 
       # ============================================================
       # 11. CONECTAR TAILSCALE
@@ -386,8 +393,17 @@ jobs:
         env:
           TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
-          $ts =
-            "$env:ProgramFiles\Tailscale\tailscale.exe"
+          if ([string]::IsNullOrWhiteSpace($env:TAILSCALE_AUTH_KEY)) {
+            Write-Error "O Secret TAILSCALE_AUTH_KEY não foi configurado."
+            exit 1
+          }
+
+          $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          if (-not (Test-Path $ts)) {
+            Write-Error "Tailscale não foi encontrado."
+            exit 1
+          }
 
           & $ts up `
             --authkey="$env:TAILSCALE_AUTH_KEY" `
@@ -396,11 +412,10 @@ jobs:
           $ip = $null
 
           for ($i = 0; $i -lt 15; $i++) {
-
             Start-Sleep -Seconds 4
 
-            $ip =
-              & $ts ip -4 2>$null
+            $ip = & $ts ip -4 2>$null |
+              Select-Object -First 1
 
             if ($ip) {
               break
@@ -412,6 +427,8 @@ jobs:
             exit 1
           }
 
+          $ip = $ip.Trim()
+
           "IP_TAILSCALE=$ip" |
             Out-File `
               $env:GITHUB_ENV `
@@ -419,25 +436,26 @@ jobs:
 
           Write-Host "IP Tailscale: $ip"
 
-
       # ============================================================
       # 12. TESTAR RDP
       # ============================================================
       - name: 🔎 Testar RDP
         shell: powershell
         run: |
-          $teste =
-            Test-NetConnection `
-              -ComputerName $env:IP_TAILSCALE `
-              -Port 3389
+          Write-Host "Testando porta 3389..."
+
+          $teste = Test-NetConnection `
+            -ComputerName $env:IP_TAILSCALE `
+            -Port 3389 `
+            -WarningAction SilentlyContinue
 
           if (-not $teste.TcpTestSucceeded) {
             Write-Error "RDP não respondeu na porta 3389."
             exit 1
           }
 
-          Write-Host "RDP funcionando." -ForegroundColor Green
-
+          Write-Host "RDP funcionando." `
+            -ForegroundColor Green
 
       # ============================================================
       # 13. RELATÓRIO FINAL
@@ -446,30 +464,13 @@ jobs:
         shell: powershell
         run: |
           Write-Host ""
-          Write-Host "============================================" -ForegroundColor Cyan
-          Write-Host "             RDP PRONTO" -ForegroundColor Cyan
-          Write-Host "============================================" -ForegroundColor Cyan
+          Write-Host "============================================"
+          Write-Host "             RDP PRONTO"
+          Write-Host "============================================"
 
           Write-Host "IP Tailscale : $env:IP_TAILSCALE"
           Write-Host "Usuário      : RDP"
-
-          Write-Host ""
-          Write-Host "FERRAMENTAS:"
-          
-          if (Get-Command git -ErrorAction SilentlyContinue) {
-            Write-Host "Git          : OK" -ForegroundColor Green
-          }
-          else {
-            Write-Host "Git          : NÃO ENCONTRADO" -ForegroundColor Yellow
-          }
-
-          if (Get-Command node -ErrorAction SilentlyContinue) {
-            Write-Host "Node.js      : OK" -ForegroundColor Green
-            Write-Host "Node versão  : $(node --version)"
-          }
-          else {
-            Write-Host "Node.js      : NÃO ENCONTRADO" -ForegroundColor Yellow
-          }
+          Write-Host "Porta        : 3389"
 
           Write-Host ""
           Write-Host "IDIOMA       : Português (Brasil)"
@@ -482,8 +483,8 @@ jobs:
           Write-Host "D:\Downloads"
 
           Write-Host ""
+          Write-Host "A senha do usuário RDP foi mascarada."
           Write-Host "============================================"
-
 
       # ============================================================
       # 14. MANTER RUNNER ATIVO
