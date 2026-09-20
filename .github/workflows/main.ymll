@@ -1,0 +1,509 @@
+name: RDP - Windows PT-BR
+
+on:
+  workflow_dispatch:
+
+jobs:
+  rdp:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
+    steps:
+
+      # ============================================================
+      # 1. IDIOMA E REGIÃO
+      # ============================================================
+      - name: 🇧🇷 Configurar Windows em Português do Brasil
+        shell: powershell
+        run: |
+          Write-Host "========================================"
+          Write-Host " CONFIGURANDO WINDOWS EM PORTUGUÊS"
+          Write-Host "========================================"
+
+          try {
+            $idioma = New-WinUserLanguageList pt-BR
+
+            Set-WinUserLanguageList `
+              $idioma `
+              -Force `
+              -ErrorAction Stop
+
+            Set-WinUILanguageOverride `
+              -Language pt-BR `
+              -ErrorAction SilentlyContinue
+
+            Set-Culture `
+              pt-BR `
+              -ErrorAction SilentlyContinue
+
+            Set-WinHomeLocation `
+              -GeoId 32 `
+              -ErrorAction SilentlyContinue
+
+            Write-Host "Português do Brasil configurado." `
+              -ForegroundColor Green
+          }
+          catch {
+            Write-Host "Algumas configurações de idioma não puderam ser aplicadas."
+            Write-Host $_.Exception.Message
+          }
+
+          Write-Host ""
+          Write-Host "O restante do RDP continuará normalmente."
+
+      # ============================================================
+      # 2. DIAGNÓSTICO INICIAL
+      # ============================================================
+      - name: 📊 Diagnóstico do computador
+        shell: powershell
+        run: |
+          Write-Host ""
+          Write-Host "========================================"
+          Write-Host " DIAGNÓSTICO DO RUNNER"
+          Write-Host "========================================"
+
+          $cpu = Get-CimInstance Win32_Processor
+          $ram = Get-CimInstance Win32_ComputerSystem
+
+          $ramGB = [math]::Round(
+            $ram.TotalPhysicalMemory / 1GB,
+            2
+          )
+
+          Write-Host "CPU: $($cpu.Name)"
+          Write-Host "Núcleos: $($cpu.NumberOfCores)"
+          Write-Host "Threads: $($cpu.NumberOfLogicalProcessors)"
+          Write-Host "RAM: $ramGB GB"
+
+          Write-Host ""
+          Write-Host "DISCOS:"
+
+          Get-PSDrive -PSProvider FileSystem |
+            Select-Object Name,
+              @{N="UsadoGB";E={[math]::Round($_.Used/1GB,2)}},
+              @{N="LivreGB";E={[math]::Round($_.Free/1GB,2)}} |
+            Format-Table -AutoSize
+
+      # ============================================================
+      # 3. LIMPEZA SEGURA
+      # ============================================================
+      - name: 🧹 Fazer limpeza segura
+        shell: powershell
+        run: |
+          Write-Host "========================================"
+          Write-Host " LIMPEZA DO WINDOWS"
+          Write-Host "========================================"
+
+          $pastas = @(
+            "$env:TEMP\*",
+            "$env:LOCALAPPDATA\Temp\*"
+          )
+
+          foreach ($pasta in $pastas) {
+            try {
+              Remove-Item `
+                $pasta `
+                -Recurse `
+                -Force `
+                -ErrorAction SilentlyContinue
+            }
+            catch {}
+          }
+
+          try {
+            Remove-Item `
+              "$env:LOCALAPPDATA\Microsoft\Windows\Explorer\thumbcache*" `
+              -Force `
+              -ErrorAction SilentlyContinue
+          }
+          catch {}
+
+          try {
+            DISM.exe `
+              /Online `
+              /Cleanup-Image `
+              /StartComponentCleanup `
+              /Quiet
+          }
+          catch {}
+
+          Write-Host "Limpeza concluída." `
+            -ForegroundColor Green
+
+      # ============================================================
+      # 4. CONFIGURAÇÕES BÁSICAS DE DESEMPENHO
+      # ============================================================
+      - name: ⚡ Otimizar configurações do Windows
+        shell: powershell
+        run: |
+          Write-Host "Configurando desempenho..."
+
+          try {
+            Set-ItemProperty `
+              "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" `
+              -Name VisualFXSetting `
+              -Type DWord `
+              -Value 2 `
+              -Force
+          }
+          catch {}
+
+          try {
+            powercfg /setactive SCHEME_MIN
+          }
+          catch {}
+
+          Write-Host "Configurações aplicadas."
+
+      # ============================================================
+      # 5. INSTALAR FERRAMENTAS
+      # ============================================================
+      - name: 🛠️ Instalar ferramentas de desenvolvimento
+        shell: powershell
+        run: |
+          Write-Host "Verificando ferramentas..."
+
+          if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+            try {
+              winget install `
+                --id Git.Git `
+                --silent `
+                --accept-package-agreements `
+                --accept-source-agreements
+            }
+            catch {
+              Write-Host "Git não pôde ser instalado."
+            }
+          }
+
+          if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+            try {
+              winget install `
+                --id OpenJS.NodeJS.LTS `
+                --silent `
+                --accept-package-agreements `
+                --accept-source-agreements
+            }
+            catch {
+              Write-Host "Node.js não pôde ser instalado."
+            }
+          }
+
+          Write-Host "Ferramentas verificadas."
+
+      # ============================================================
+      # 6. VERIFICAR DIRECTX E GPU
+      # ============================================================
+      - name: 🎮 Verificar GPU e DirectX
+        shell: powershell
+        run: |
+          Write-Host "========================================"
+          Write-Host " GPU / DIRECTX"
+          Write-Host "========================================"
+
+          try {
+            Get-CimInstance Win32_VideoController |
+              Select-Object Name,
+                DriverVersion,
+                VideoModeDescription |
+              Format-List
+          }
+          catch {
+            Write-Host "Não foi possível obter informações da GPU."
+          }
+
+          Write-Host ""
+          Write-Host "DirectX:"
+
+          try {
+            dxdiag /t "$env:TEMP\dxdiag.txt" | Out-Null
+
+            if (Test-Path "$env:TEMP\dxdiag.txt") {
+              Select-String `
+                -Path "$env:TEMP\dxdiag.txt" `
+                -Pattern "DirectX Version"
+            }
+          }
+          catch {
+            Write-Host "Diagnóstico do DirectX indisponível."
+          }
+
+      # ============================================================
+      # 7. PREPARAR ARMAZENAMENTO
+      # ============================================================
+      - name: 💾 Preparar armazenamento
+        shell: powershell
+        run: |
+          Write-Host "========================================"
+          Write-Host " ARMAZENAMENTO"
+          Write-Host "========================================"
+
+          $pastas = @(
+            "D:\Projetos",
+            "D:\Roblox",
+            "D:\Downloads"
+          )
+
+          foreach ($pasta in $pastas) {
+            New-Item `
+              -ItemType Directory `
+              -Force `
+              -Path $pasta |
+              Out-Null
+          }
+
+          Get-PSDrive -PSProvider FileSystem |
+            Select-Object Name,
+              @{N="LivreGB";E={[math]::Round($_.Free/1GB,2)}} |
+            Format-Table
+
+      # ============================================================
+      # 8. CONFIGURAR RDP
+      # ============================================================
+      - name: 🖥️ Configurar Área de Trabalho Remota
+        shell: powershell
+        run: |
+          Write-Host "Configurando RDP..."
+
+          Set-ItemProperty `
+            -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" `
+            -Name "fDenyTSConnections" `
+            -Value 0 `
+            -Force
+
+          Set-ItemProperty `
+            -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" `
+            -Name "UserAuthentication" `
+            -Value 1 `
+            -Force
+
+          Set-ItemProperty `
+            -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" `
+            -Name "SecurityLayer" `
+            -Value 1 `
+            -Force
+
+          netsh advfirewall firewall delete rule `
+            name="RDP-Tailscale" 2>$null
+
+          netsh advfirewall firewall add rule `
+            name="RDP-Tailscale" `
+            dir=in `
+            action=allow `
+            protocol=TCP `
+            localport=3389
+
+          Restart-Service TermService -Force
+
+          Write-Host "RDP ativado." `
+            -ForegroundColor Green
+
+      # ============================================================
+      # 9. CRIAR USUÁRIO RDP
+      # ============================================================
+      - name: 🔑 Criar usuário RDP
+        shell: powershell
+        run: |
+          $maiusculas = [char[]](65..90)
+          $minusculas = [char[]](97..122)
+          $numeros = [char[]](48..57)
+          $especiais = [char[]]@(33,35,36,37,38,42,43,45,61,64)
+
+          $senhaArray = @()
+
+          $senhaArray += $maiusculas | Get-Random -Count 4
+          $senhaArray += $minusculas | Get-Random -Count 4
+          $senhaArray += $numeros | Get-Random -Count 4
+          $senhaArray += $especiais | Get-Random -Count 4
+
+          $senha = -join (
+            $senhaArray |
+            Sort-Object { Get-Random }
+          )
+
+          "::add-mask::$senha"
+
+          $secure = ConvertTo-SecureString `
+            $senha `
+            -AsPlainText `
+            -Force
+
+          if (-not (Get-LocalUser `
+              -Name "RDP" `
+              -ErrorAction SilentlyContinue)) {
+
+            New-LocalUser `
+              -Name "RDP" `
+              -Password $secure `
+              -AccountNeverExpires
+
+            Write-Host "Usuário RDP criado."
+          }
+          else {
+            Write-Host "Usuário RDP já existe."
+          }
+
+          Add-LocalGroupMember `
+            -Group "Remote Desktop Users" `
+            -Member "RDP" `
+            -ErrorAction SilentlyContinue
+
+          "SENHA_RDP=$senha" |
+            Out-File `
+              $env:GITHUB_ENV `
+              -Append
+
+          Write-Host "Usuário RDP configurado."
+
+      # ============================================================
+      # 10. INSTALAR TAILSCALE
+      # ============================================================
+      - name: 🌐 Instalar Tailscale
+        shell: powershell
+        run: |
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $arquivo = "$env:TEMP\tailscale.msi"
+
+          Invoke-WebRequest `
+            -Uri $url `
+            -OutFile $arquivo `
+            -UseBasicParsing
+
+          Start-Process `
+            msiexec.exe `
+            -ArgumentList `
+              "/i",
+              "`"$arquivo`"",
+              "/quiet",
+              "/norestart" `
+            -Wait
+
+          Remove-Item `
+            $arquivo `
+            -Force `
+            -ErrorAction SilentlyContinue
+
+          Write-Host "Tailscale instalado."
+
+      # ============================================================
+      # 11. CONECTAR TAILSCALE
+      # ============================================================
+      - name: 🔗 Conectar ao Tailscale
+        shell: powershell
+        env:
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TAILSCALE_AUTH_KEY)) {
+            Write-Error "O Secret TAILSCALE_AUTH_KEY não foi configurado."
+            exit 1
+          }
+
+          $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          if (-not (Test-Path $ts)) {
+            Write-Error "Tailscale não foi encontrado."
+            exit 1
+          }
+
+          & $ts up `
+            --authkey="$env:TAILSCALE_AUTH_KEY" `
+            --hostname="gh-rdp-$env:GITHUB_RUN_ID"
+
+          $ip = $null
+
+          for ($i = 0; $i -lt 15; $i++) {
+            Start-Sleep -Seconds 4
+
+            $ip = & $ts ip -4 2>$null |
+              Select-Object -First 1
+
+            if ($ip) {
+              break
+            }
+          }
+
+          if (-not $ip) {
+            Write-Error "Tailscale não recebeu um endereço IP."
+            exit 1
+          }
+
+          $ip = $ip.Trim()
+
+          "IP_TAILSCALE=$ip" |
+            Out-File `
+              $env:GITHUB_ENV `
+              -Append
+
+          Write-Host "IP Tailscale: $ip"
+
+      # ============================================================
+      # 12. TESTAR RDP
+      # ============================================================
+      - name: 🔎 Testar RDP
+        shell: powershell
+        run: |
+          Write-Host "Testando porta 3389..."
+
+          $teste = Test-NetConnection `
+            -ComputerName $env:IP_TAILSCALE `
+            -Port 3389 `
+            -WarningAction SilentlyContinue
+
+          if (-not $teste.TcpTestSucceeded) {
+            Write-Error "RDP não respondeu na porta 3389."
+            exit 1
+          }
+
+          Write-Host "RDP funcionando." `
+            -ForegroundColor Green
+
+      # ============================================================
+      # 13. RELATÓRIO FINAL
+      # ============================================================
+      - name: 📋 Relatório final
+        shell: powershell
+        run: |
+          Write-Host ""
+          Write-Host "============================================"
+          Write-Host "             RDP PRONTO"
+          Write-Host "============================================"
+
+          Write-Host "IP Tailscale : $env:IP_TAILSCALE"
+          Write-Host "Usuário      : RDP"
+          Write-Host "Porta        : 3389"
+
+          Write-Host ""
+          Write-Host "IDIOMA       : Português (Brasil)"
+          Write-Host "REGIÃO       : Brasil"
+
+          Write-Host ""
+          Write-Host "PASTAS:"
+          Write-Host "D:\Projetos"
+          Write-Host "D:\Roblox"
+          Write-Host "D:\Downloads"
+
+          Write-Host ""
+          Write-Host "A senha do usuário RDP foi mascarada."
+          Write-Host "============================================"
+
+      # ============================================================
+      # 14. MANTER RUNNER ATIVO
+      # ============================================================
+      - name: ⏱️ Manter sessão ativa
+        shell: powershell
+        run: |
+          Write-Host ""
+          Write-Host "RDP está ativo." -ForegroundColor Green
+          Write-Host "Mantenha esta execução do GitHub Actions aberta."
+          Write-Host ""
+
+          $minutos = 0
+
+          while ($true) {
+            Start-Sleep -Seconds 60
+            $minutos++
+
+            Write-Host `
+              "Sessão ativa: $minutos minuto(s)" `
+              -ForegroundColor DarkGray
+          }
